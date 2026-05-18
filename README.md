@@ -1,7 +1,8 @@
 # ELYTRA
+<img width="2498" height="1360" alt="elytra_ss" src="https://github.com/user-attachments/assets/6e729c69-4eda-4aa1-8d81-ef1620d48478" />
 
 Real-time satellite tracking dashboard covering every country with objects in
-orbit. A single static `index.html` — no build step, no backend.
+orbit. A single static `index.html`  no build step, no backend.
 
 ## Features
 
