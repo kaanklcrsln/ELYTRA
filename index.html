@@ -1,0 +1,797 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ELYTRA | Watch, Track, Explore</title>
+<link rel="icon" type="image/png" href="assets/icon.png">
+
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Courier+Prime:ital,wght@0,400;0,700;1,400;1,700&display=swap" rel="stylesheet">
+
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script src="https://unpkg.com/satellite.js@5.0.0/dist/satellite.min.js"></script>
+<script src="https://unpkg.com/three@0.149.0/build/three.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+
+<style>
+:root{
+  --bg:#030F10; --fg:#ffffff; --muted:#888888; --dim:#4a5658;
+  --accent:#00ff00;
+  --navbar-bg:rgba(3,15,16,0.78);
+  --border:rgba(255,255,255,0.08);
+  --glass-sheen:linear-gradient(180deg,rgba(255,255,255,0.10),rgba(255,255,255,0.02) 40%,rgba(255,255,255,0) 70%);
+  --glass-edge:rgba(255,255,255,0.14);
+  --glass-bg:rgba(3,15,16,0.78);
+  --glass-blur:blur(34px) saturate(200%);
+  --glass-elev:0 10px 34px rgba(0,0,0,0.22);
+  --dock:72px;
+  --rcol:354px;          /* right column width */
+  --lcol:430px;          /* left sidebar width (flags + sat list) */
+  --flag:56px;           /* flag column width */
+  --bp:320px;            /* bottom info bar height */
+  --nav:56px;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+html,body{height:100%}
+body{
+  font-family:'Courier Prime',monospace;
+  background:var(--bg); color:var(--fg); overflow:hidden;
+  font-size:13px;
+}
+/* Map = top-center region only (not fullscreen) */
+#map{position:fixed;top:var(--nav);left:var(--lcol);right:var(--rcol);
+  bottom:var(--bp);z-index:0;background:#030F10;
+  border-bottom:1px solid var(--border)}
+/* Docked panels: flush, sharp corners, solid black bg */
+.info-panel,.rcol,.orbit-panel,.stats-panel,.bottom{
+  border-radius:0!important; background:#000000!important}
+.glass{
+  border:0.5px solid var(--glass-edge);
+  background:var(--glass-sheen),var(--glass-bg);
+  backdrop-filter:var(--glass-blur);
+  -webkit-backdrop-filter:var(--glass-blur);
+  box-shadow:inset 0 1px 0 var(--glass-edge),var(--glass-elev);
+  border-radius:14px;
+}
+::-webkit-scrollbar{width:7px;height:7px}
+::-webkit-scrollbar-thumb{background:var(--dim);border-radius:4px}
+::-webkit-scrollbar-track{background:transparent}
+
+/* ---- Navbar ---- */
+.navbar{
+  position:fixed; top:0; left:0; right:0; height:var(--nav);
+  display:flex; align-items:center; justify-content:center;
+  background:var(--navbar-bg);
+  backdrop-filter:blur(10px); -webkit-backdrop-filter:blur(10px);
+  border-bottom:1px solid var(--border); z-index:1200;
+}
+.nav-logo{color:var(--fg);text-decoration:none}
+.nav-logo img{height:30px;width:auto;display:block;transition:filter .2s}
+.nav-logo:hover img{filter:drop-shadow(0 0 6px var(--accent))}
+.nav-sq{
+  position:absolute; top:50%; transform:translateY(-50%);
+  width:40px; height:40px; border-radius:10px;
+  display:inline-flex; align-items:center; justify-content:center;
+  color:var(--fg); text-decoration:none; cursor:pointer; font-size:1.1rem;
+  font-weight:700; border:0.5px solid var(--glass-edge);
+  background:var(--glass-sheen),rgba(255,255,255,0.04);
+  box-shadow:inset 0 1px 0 var(--glass-edge);
+  transition:border-color .2s,box-shadow .2s,transform .2s,color .2s;
+}
+.nav-sq:hover{
+  transform:translateY(-50%) scale(1.06); color:var(--accent);
+  border-color:color-mix(in srgb,var(--accent) 55%,var(--glass-edge));
+  box-shadow:inset 0 1px 0 var(--glass-edge),
+             0 0 14px color-mix(in srgb,var(--accent) 35%,transparent);
+}
+.gh-btn{left:14px}
+.about-btn{right:62px}
+.site-btn{right:14px}
+.nav-sq svg{width:22px;height:22px;display:block}
+.site-btn img{width:24px;height:24px;object-fit:contain;display:block}
+
+/* ---- Panel chrome ---- */
+.pnl-h{
+  font-size:.66rem; letter-spacing:.22em; color:var(--muted);
+  text-transform:uppercase; padding:10px 14px; flex-shrink:0;
+  border-bottom:1px solid var(--border);
+  display:flex; justify-content:space-between; align-items:center;
+}
+.pnl-h .tag{color:var(--accent);letter-spacing:.05em}
+
+/* ---- Left: full TLE readout ---- */
+/* Bottom horizontal info bar (focused satellite, live) */
+.info-panel{
+  position:fixed; left:var(--lcol); right:var(--rcol); bottom:0; z-index:1000;
+  height:var(--bp); display:flex; flex-direction:column; overflow:hidden;
+  border-top:1px solid var(--border);
+}
+.info-body{flex:1;overflow:auto;padding:8px 16px;display:flex;
+  flex-wrap:wrap;align-content:flex-start;gap:5px 22px}
+.sat-name{flex-basis:100%;font-size:.95rem;font-weight:700;color:var(--accent);
+  line-height:1.2;word-break:break-word}
+.sat-sub{flex-basis:100%;color:var(--muted);font-size:.7rem;margin-bottom:4px}
+.kv{display:flex;flex-direction:column;gap:1px;padding:2px 0;min-width:78px}
+.kv .k{color:var(--muted);white-space:nowrap;font-size:.6rem;
+  letter-spacing:.04em;text-transform:uppercase}
+.kv .v{color:var(--fg);font-weight:700;word-break:break-word;font-size:.8rem}
+.grp{flex-basis:100%;font-size:.58rem;letter-spacing:.2em;color:var(--dim);
+  text-transform:uppercase;margin:8px 0 0;
+  border-top:1px solid rgba(255,255,255,0.06);padding-top:6px}
+.info-empty{color:var(--dim);line-height:1.7;padding:6px 0;flex-basis:100%}
+
+/* ---- Right column: 3D orbit + charts ---- */
+.rcol{
+  position:fixed; top:var(--nav); right:0; z-index:1000;
+  width:var(--rcol); bottom:0;
+  display:flex; flex-direction:column; gap:0;
+  border-left:1px solid var(--border);
+}
+.stats-panel{border-top:1px solid var(--border)}
+.orbit-panel{flex:0 0 34%; display:flex; flex-direction:column; overflow:hidden}
+#orbit3d{flex:1; min-height:0}
+.orbit-legend{display:flex;flex-wrap:wrap;gap:8px 12px;padding:8px 12px;
+  border-top:1px solid var(--border);max-height:50px;overflow-y:auto}
+.lg{display:flex;align-items:center;gap:6px;font-size:.7rem;color:var(--fg)}
+.lg .sw{width:10px;height:10px;border-radius:50%}
+.stats-panel{flex:1; display:flex; flex-direction:column; overflow:hidden}
+.charts{flex:1;display:flex;flex-direction:column;gap:6px;padding:8px 10px;min-height:0}
+.chart-box{flex:1;min-height:0;position:relative}
+.chart-box span{position:absolute;top:3px;right:8px;left:auto;
+  font-size:.58rem;letter-spacing:.16em;color:var(--muted);
+  text-transform:uppercase;z-index:2;pointer-events:none;
+  background:rgba(0,0,0,0.78);padding:1px 6px;border-radius:5px}
+
+/* ---- Left sidebar: flag column + satellite selector ---- */
+.bottom{
+  position:fixed; left:0; top:var(--nav); bottom:0;
+  width:var(--lcol); z-index:1000; display:flex; flex-direction:row;
+  overflow:hidden;
+}
+/* far-left vertical flag column (icons only, name on hover) */
+.flagcol{width:var(--flag);flex-shrink:0;display:flex;flex-direction:column;
+  border-right:1px solid var(--border)}
+.flag-arrow{height:26px;flex-shrink:0;display:flex;align-items:center;
+  justify-content:center;color:rgba(255,255,255,0.6);cursor:pointer;
+  background:#000;transition:color .16s}
+.flag-arrow:first-child{border-bottom:1px solid var(--border)}
+.flag-arrow:last-child{border-top:1px solid var(--border)}
+.flag-arrow:hover{color:var(--accent)}
+.flag-arrow svg{width:15px;height:15px;display:block}
+.tabs{display:flex;flex-direction:column;gap:6px;flex:1;
+  overflow-y:auto;overflow-x:hidden;padding:8px 0;
+  scrollbar-width:none;-ms-overflow-style:none}
+.tabs::-webkit-scrollbar{display:none}
+.tab{display:flex;align-items:center;justify-content:center;padding:5px 0;
+  cursor:pointer;flex-shrink:0;border:1px solid transparent;
+  border-left:2px solid transparent;background:transparent;
+  font-family:inherit;transition:.16s}
+.tab:hover{background:rgba(255,255,255,0.06)}
+.tab.active{border-left-color:var(--accent);
+  background:color-mix(in srgb,var(--accent) 14%,transparent)}
+.tab img{width:34px;height:23px;object-fit:cover;border-radius:3px;
+  border:1px solid var(--glass-edge)}
+.tab span{display:none}                 /* no country text on screen */
+/* right part: search + satellite list */
+.satsel{flex:1;display:flex;flex-direction:column;overflow:hidden;min-width:0}
+.satsel-h{padding:8px 10px;border-bottom:1px solid var(--border)}
+.search{width:100%;background:rgba(255,255,255,0.04);
+  border:1px solid var(--glass-edge);border-radius:9px;color:var(--fg);
+  font-family:inherit;font-size:.74rem;padding:7px 11px;outline:none}
+.search:focus{border-color:color-mix(in srgb,var(--accent) 55%,var(--glass-edge))}
+.sat-list{flex:1;overflow-y:auto;overflow-x:hidden}
+table.sl{width:100%;border-collapse:collapse;font-size:.74rem}
+table.sl th{position:sticky;top:0;background:rgba(3,15,16,0.95);
+  color:var(--muted);font-weight:400;text-align:left;letter-spacing:.08em;
+  padding:7px 12px;font-size:.64rem;text-transform:uppercase;
+  border-bottom:1px solid var(--border);z-index:1}
+table.sl td{padding:6px 12px;border-bottom:1px solid rgba(255,255,255,0.05)}
+table.sl tr{cursor:pointer;transition:background .12s}
+table.sl tbody tr:hover{background:rgba(255,255,255,0.04)}
+table.sl tr.focused{background:color-mix(in srgb,var(--accent) 12%,transparent)}
+table.sl th,table.sl td{padding:6px 8px}
+table.sl td.nm{color:var(--fg);font-weight:700;max-width:160px;
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+table.sl td.dim{color:var(--muted)}
+.ck{appearance:none;-webkit-appearance:none;width:15px;height:15px;
+  border:1.5px solid var(--dim);border-radius:4px;cursor:pointer;
+  vertical-align:middle;transition:.15s;position:relative}
+.ck:checked{background:var(--accent);border-color:var(--accent)}
+.ck:checked::after{content:'';position:absolute;left:4px;top:1px;width:4px;
+  height:8px;border:solid #03130a;border-width:0 2px 2px 0;transform:rotate(45deg)}
+
+/* ---- Layers drawer (left, above bottom panel) ---- */
+.layers-dock{position:fixed; left:calc(var(--lcol) + 12px);
+  bottom:calc(var(--bp) + 12px); z-index:1100;
+  display:flex; flex-direction:column; align-items:flex-start; gap:10px}
+.layers-toggle{width:64px;height:46px;border-radius:12px;cursor:pointer;
+  display:inline-flex;align-items:center;justify-content:center;color:var(--fg);
+  transition:.2s}
+.layers-toggle:hover,.layers-dock.open .layers-toggle{color:var(--accent);
+  border-color:color-mix(in srgb,var(--accent) 55%,var(--glass-edge));
+  box-shadow:inset 0 1px 0 var(--glass-edge),var(--glass-elev),
+             0 0 14px color-mix(in srgb,var(--accent) 35%,transparent)}
+.layers-toggle svg{width:22px;height:22px}
+.layers-panel{order:-1;width:64px;padding:9px;display:flex;flex-direction:column;
+  gap:8px;opacity:0;transform:translateY(10px) scale(.96);
+  transform-origin:bottom left;pointer-events:none;transition:.22s}
+.layers-dock.open .layers-panel{opacity:1;transform:none;pointer-events:auto}
+.layer-opt{width:100%;height:46px;border-radius:8px;cursor:pointer;
+  border:2px solid transparent;background-size:cover;background-position:center;
+  transition:.2s}
+.layer-opt:hover{transform:scale(1.05)}
+.layer-opt.active{border-color:var(--accent);
+  box-shadow:0 0 12px color-mix(in srgb,var(--accent) 45%,transparent)}
+
+/* ---- Modal / toast ---- */
+.modal-backdrop{position:fixed;inset:0;z-index:2000;display:none;
+  align-items:center;justify-content:center;background:rgba(3,15,16,0.55);
+  backdrop-filter:blur(16px)}
+.modal-backdrop.open{display:flex}
+.modal{max-width:520px;width:calc(100% - 40px);padding:30px 32px}
+.modal h3{font-size:1.1rem;color:var(--accent);letter-spacing:.1em;margin-bottom:14px}
+.modal p{font-size:.86rem;line-height:1.7;color:#cfd6d6;margin-bottom:12px}
+.modal .close{margin-top:8px;padding:8px 18px;border-radius:10px;
+  border:1px solid var(--glass-edge);color:var(--fg);cursor:pointer;
+  font-size:.8rem;font-family:inherit;background:transparent}
+.modal .close:hover{border-color:var(--accent);color:var(--accent)}
+.toast{position:fixed;bottom:calc(var(--bp) + 14px);
+  left:calc(var(--lcol) + (100vw - var(--lcol) - var(--rcol))/2);
+  transform:translateX(-50%);z-index:1500;padding:9px 18px;font-size:.78rem;
+  color:var(--fg);border-radius:12px;transition:opacity .4s;pointer-events:none}
+.leaflet-container{background:#030F10}
+.leaflet-control-attribution{font-size:9px;background:rgba(3,15,16,.6)!important}
+.sat-tip{font-family:'Courier Prime',monospace !important;font-size:11px}
+</style>
+</head>
+<body>
+
+<div id="map"></div>
+
+<nav class="navbar">
+  <a class="nav-sq gh-btn" href="https://github.com/kaanklcrsln/ELYTRA.git"
+     target="_blank" title="GitHub — kaanklcrsln/ELYTRA">
+    <svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 .5C5.37.5 0 5.87 0 12.5c0 5.3 3.44 9.8 8.21 11.39.6.11.82-.26.82-.58 0-.29-.01-1.05-.02-2.06-3.34.73-4.04-1.61-4.04-1.61-.55-1.39-1.34-1.76-1.34-1.76-1.09-.75.08-.73.08-.73 1.21.09 1.84 1.24 1.84 1.24 1.07 1.84 2.81 1.31 3.5 1 .11-.78.42-1.31.76-1.61-2.67-.3-5.47-1.33-5.47-5.93 0-1.31.47-2.38 1.24-3.22-.12-.31-.54-1.52.12-3.18 0 0 1.01-.32 3.3 1.23a11.5 11.5 0 0 1 6 0c2.28-1.55 3.29-1.23 3.29-1.23.66 1.66.24 2.87.12 3.18.77.84 1.23 1.91 1.23 3.22 0 4.61-2.81 5.62-5.49 5.92.43.37.81 1.1.81 2.22 0 1.61-.01 2.9-.01 3.29 0 .32.21.7.82.58A12.01 12.01 0 0 0 24 12.5C24 5.87 18.63.5 12 .5z"/></svg>
+  </a>
+  <a class="nav-logo" href="https://kaanklcrsln.space" target="_blank">
+    <img src="assets/logo.png" alt="ELYTRA">
+  </a>
+  <div class="nav-sq about-btn" id="aboutBtn" title="About Project">?</div>
+  <a class="nav-sq site-btn" href="https://kaanklcrsln.space" target="_blank"
+     title="kaanklcrsln.space"><img src="assets/jager_logo.png" alt="site"></a>
+</nav>
+
+<aside class="info-panel glass">
+  <div class="pnl-h"><span>Satellite · TLE</span><span class="tag" id="liveTag">LIVE</span></div>
+  <div class="info-body" id="infoBody">
+    <div class="info-empty">Loading catalog…<br>Pick a country flag on the
+      left, then tick satellites to track them.</div>
+  </div>
+</aside>
+
+<div class="rcol">
+  <div class="orbit-panel glass">
+    <div class="pnl-h"><span>3D Orbit</span><span class="tag" id="orbCount">0</span></div>
+    <div id="orbit3d"></div>
+    <div class="orbit-legend" id="legend"></div>
+  </div>
+  <div class="stats-panel glass">
+    <div class="pnl-h"><span>Live Comparison</span><span class="tag">REALTIME</span></div>
+    <div class="charts">
+      <div class="chart-box"><span>Altitude · km</span><canvas id="cAlt"></canvas></div>
+      <div class="chart-box"><span>Velocity · km/s</span><canvas id="cVel"></canvas></div>
+    </div>
+  </div>
+</div>
+
+<div class="bottom glass">
+  <div class="flagcol">
+    <div class="flag-arrow" id="flagUp" title="Scroll up">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"
+        stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+        <polyline points="6 15 12 9 18 15"/></svg>
+    </div>
+    <div class="tabs" id="tabs"></div>
+    <div class="flag-arrow" id="flagDn" title="Scroll down">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"
+        stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+        <polyline points="6 9 12 15 18 9"/></svg>
+    </div>
+  </div>
+  <div class="satsel">
+    <div class="satsel-h">
+      <input class="search" id="search" placeholder="Search all satellites…">
+    </div>
+    <div class="sat-list">
+      <table class="sl">
+        <thead><tr>
+          <th style="width:30px"></th><th>Satellite</th>
+          <th>NORAD</th><th>Period</th>
+        </tr></thead>
+        <tbody id="satRows"></tbody>
+      </table>
+    </div>
+  </div>
+</div>
+
+<div class="layers-dock" id="layersDock">
+  <div class="layers-panel glass" id="layersPanel"></div>
+  <button class="layers-toggle glass" id="layersToggle" title="Base layers">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+      stroke-linecap="round" stroke-linejoin="round">
+      <polygon points="12 2 22 8.5 12 15 2 8.5 12 2"/>
+      <polyline points="2 15.5 12 22 22 15.5"/></svg>
+  </button>
+</div>
+
+<div class="modal-backdrop" id="modalBackdrop">
+  <div class="modal glass">
+    <h3>ELYTRA — Satellite Tracker</h3>
+    <p>A real-time dashboard for every country with objects in orbit. Positions
+       and orbital elements are propagated client-side from live <strong>TLE</strong>
+       data (CelesTrak), cross-referenced with the SATCAT registry for ownership.</p>
+    <p>Pick a country tab, tick satellites, and watch them on the 2D map, the 3D
+       orbit view and the live comparison charts simultaneously. Click any row to
+       inspect its full TLE-derived element set on the left.</p>
+    <p><strong>ELYTRA</strong> — design system from kaanklcrsln.space.</p>
+    <button class="close" id="modalClose">Close</button>
+  </div>
+</div>
+
+<div class="toast glass" id="toast" style="opacity:0"></div>
+
+<script>
+/* ============================================================
+   0. CONSTANTS / HELPERS
+   ============================================================ */
+const MU=398600.4418, RE=6378.137;
+const PALETTE=['#00ff00','#36c5f0','#ff6b6b','#f1c40f','#b388ff','#ff9f43',
+  '#1abc9c','#e056fd','#7bed9f','#ff7979','#74b9ff','#fdcb6e'];
+const MAX_SEL=24;
+const $=id=>document.getElementById(id);
+const toastEl=$('toast');let toastT;
+function toast(m){toastEl.textContent=m;toastEl.style.opacity=1;
+  clearTimeout(toastT);toastT=setTimeout(()=>toastEl.style.opacity=0,2800);}
+
+/* ============================================================
+   1. MAP + BASE LAYERS
+   ============================================================ */
+const map=L.map('map',{zoomControl:false,worldCopyJump:true,
+  attributionControl:true,minZoom:2,maxZoom:9}).setView([20,0],3);
+const BASES={
+  'CartoDB Dark':{url:'https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png',
+    sw:'https://a.basemaps.cartocdn.com/dark_all/3/4/3.png',attr:'© OSM, © CARTO'},
+  'CartoDB Light':{url:'https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png',
+    sw:'https://a.basemaps.cartocdn.com/light_all/3/4/3.png',attr:'© OSM, © CARTO'},
+  'Esri Satellite':{url:'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
+    sw:'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/3/3/4',attr:'Tiles © Esri'},
+  'OpenStreetMap':{url:'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
+    sw:'https://tile.openstreetmap.org/3/4/3.png',attr:'© OSM contributors'}
+};
+let curBase=null;
+const layersPanel=$('layersPanel'),layersDock=$('layersDock');
+function setBase(n){
+  if(curBase)map.removeLayer(curBase);
+  const b=BASES[n];
+  curBase=L.tileLayer(b.url,{attribution:b.attr,subdomains:'abcd'}).addTo(map);
+  curBase.bringToBack();
+  [...layersPanel.children].forEach(o=>o.classList.toggle('active',o.dataset.n===n));
+}
+Object.keys(BASES).forEach(n=>{
+  const o=document.createElement('div');
+  o.className='layer-opt';o.dataset.n=n;o.title=n;
+  o.style.backgroundImage=`url('${BASES[n].sw}')`;
+  o.onclick=()=>setBase(n);layersPanel.appendChild(o);
+});
+setBase('CartoDB Dark');
+setTimeout(()=>map.invalidateSize(),200);
+addEventListener('resize',()=>map.invalidateSize());
+// Flag column scroll arrows (hold to keep scrolling)
+(()=>{const tabsEl=$('tabs');let h;
+  const go=d=>tabsEl.scrollBy({top:d,behavior:'smooth'});
+  const hold=d=>{go(d);h=setInterval(()=>tabsEl.scrollBy({top:d}),60);};
+  const stop=()=>clearInterval(h);
+  const up=$('flagUp'),dn=$('flagDn');
+  up.onclick=()=>go(-140);dn.onclick=()=>go(140);
+  up.onmousedown=()=>hold(-26);dn.onmousedown=()=>hold(26);
+  ['mouseup','mouseleave'].forEach(ev=>{up.addEventListener(ev,stop);
+    dn.addEventListener(ev,stop);});})();
+
+$('layersToggle').onclick=e=>{e.stopPropagation();layersDock.classList.toggle('open');};
+document.addEventListener('click',e=>{
+  if(!layersDock.contains(e.target))layersDock.classList.remove('open');});
+
+/* ---- About modal ---- */
+const mb=$('modalBackdrop');
+$('aboutBtn').onclick=()=>mb.classList.add('open');
+$('modalClose').onclick=()=>mb.classList.remove('open');
+mb.onclick=e=>{if(e.target===mb)mb.classList.remove('open');};
+
+/* ============================================================
+   2. OWNER (country) MAP
+   ============================================================ */
+const OWNERS={
+US:['us','United States'],PRC:['cn','China'],CIS:['ru','Russia'],
+UK:['gb','United Kingdom'],FR:['fr','France'],JPN:['jp','Japan'],
+IND:['in','India'],ESA:['eu','ESA (Europe)'],GER:['de','Germany'],
+ITA:['it','Italy'],CA:['ca','Canada'],SKOR:['kr','South Korea'],
+SPN:['es','Spain'],LUXE:['lu','Luxembourg'],NETH:['nl','Netherlands'],
+BRAZ:['br','Brazil'],ARGN:['ar','Argentina'],AUS:['au','Australia'],
+ISRA:['il','Israel'],IRAN:['ir','Iran'],NKOR:['kp','North Korea'],
+TURK:['tr','Türkiye'],UAE:['ae','UAE'],SAU:['sa','Saudi Arabia'],
+EGYP:['eg','Egypt'],THAI:['th','Thailand'],INDO:['id','Indonesia'],
+MALA:['my','Malaysia'],SING:['sg','Singapore'],VTNM:['vn','Vietnam'],
+PAKI:['pk','Pakistan'],NIG:['ng','Nigeria'],MEX:['mx','Mexico'],
+CHLE:['cl','Chile'],POL:['pl','Poland'],SWED:['se','Sweden'],
+SWTZ:['ch','Switzerland'],NOR:['no','Norway'],DEN:['dk','Denmark'],
+FIN:['fi','Finland'],GREC:['gr','Greece'],POR:['pt','Portugal'],
+CZCH:['cz','Czechia'],HUN:['hu','Hungary'],AUST:['at','Austria'],
+BEL:['be','Belgium'],KAZ:['kz','Kazakhstan'],UKR:['ua','Ukraine'],
+BELA:['by','Belarus'],QAT:['qa','Qatar'],TWN:['tw','Taiwan'],
+RP:['ph','Philippines'],COL:['co','Colombia'],VENZ:['ve','Venezuela'],
+PERU:['pe','Peru'],ECU:['ec','Ecuador'],URY:['uy','Uruguay'],
+BOL:['bo','Bolivia'],CRI:['cr','Costa Rica'],GUAT:['gt','Guatemala'],
+ALG:['dz','Algeria'],MOR:['ma','Morocco'],TUN:['tn','Tunisia'],
+KEN:['ke','Kenya'],GHA:['gh','Ghana'],ETH:['et','Ethiopia'],
+ANG:['ao','Angola'],RWA:['rw','Rwanda'],AZER:['az','Azerbaijan'],
+BGD:['bd','Bangladesh'],SRI:['lk','Sri Lanka'],NPL:['np','Nepal'],
+MNG:['mn','Mongolia'],LAOS:['la','Laos'],MMR:['mm','Myanmar'],
+BHU:['bt','Bhutan'],LTU:['lt','Lithuania'],LAT:['lv','Latvia'],
+EST:['ee','Estonia'],SVN:['si','Slovenia'],SVK:['sk','Slovakia'],
+ROM:['ro','Romania'],BGR:['bg','Bulgaria'],HRV:['hr','Croatia'],
+SRB:['rs','Serbia'],IRL:['ie','Ireland'],ICE:['is','Iceland'],
+NZ:['nz','New Zealand'],CYP:['cy','Cyprus'],MALT:['mt','Malta'],
+JOR:['jo','Jordan'],OMN:['om','Oman'],KWT:['kw','Kuwait'],
+BHR:['bh','Bahrain'],IRAQ:['iq','Iraq'],SDAN:['sd','Sudan'],
+DJI:['dj','Djibouti'],ZWE:['zw','Zimbabwe'],ZAF:['za','South Africa'],
+TUVA:['tv','Tuvalu']
+};
+const ownerMeta=c=>OWNERS[c]?{iso:OWNERS[c][0],name:OWNERS[c][1]}
+  :{iso:'un',name:c||'Other / Intl'};
+
+/* ============================================================
+   3. CELESTRAK DATA (cached)
+   ============================================================ */
+const sats=new Map();          // id -> {name,owner,satrec,intl,epoch,rev,el}
+const byCountry=new Map();     // owner -> [id]
+
+function parseTLE(t){
+  const ln=t.split(/\r?\n/),out=[];
+  for(let i=0;i+2<ln.length;i+=3){
+    const name=(ln[i]||'').trim(),l1=ln[i+1],l2=ln[i+2];
+    if(!l1||!l2||l1[0]!=='1'||l2[0]!=='2'){i-=2;continue;}
+    out.push({name,l1,l2});
+  }
+  return out;
+}
+function parseCSV(t){
+  const ln=t.trim().split(/\r?\n/),h=ln[0].split(',');
+  const iId=h.indexOf('NORAD_CAT_ID'),iOw=h.indexOf('OWNER');
+  const m=new Map();
+  for(let i=1;i<ln.length;i++){
+    const c=ln[i].split(',');if(c.length<h.length)continue;
+    m.set(String(parseInt(c[iId],10)),(c[iOw]||'').trim());
+  }
+  return m;
+}
+function epochFromL1(l1){
+  let yy=+l1.substring(18,20);yy+=yy<57?2000:1900;
+  const doy=+l1.substring(20,32);
+  return new Date(Date.UTC(yy,0,1)+(doy-1)*86400000);
+}
+function elements(satrec,ecc){
+  const n=satrec.no;                       // rad/min
+  const nps=n/60;
+  const a=Math.cbrt(MU/(nps*nps));
+  return {
+    a, inc:satrec.inclo*57.29578, raan:satrec.nodeo*57.29578,
+    ecc, argp:satrec.argpo*57.29578, ma:satrec.mo*57.29578,
+    period:2*Math.PI/n, meanMot:n*1440/(2*Math.PI),
+    apo:a*(1+ecc)-RE, per:a*(1-ecc)-RE, bstar:satrec.bstar
+  };
+}
+async function getCached(url,key,ok){
+  let fresh=null;
+  try{const r=await fetch(url);const x=await r.text();
+    if(r.ok&&ok(x))fresh=x;}catch(e){}
+  if(fresh){try{localStorage.setItem(key,fresh);
+    localStorage.setItem(key+'_t',Date.now());}catch(e){}return fresh;}
+  const c=localStorage.getItem(key);
+  if(c&&ok(c)){const age=Math.round((Date.now()-(+localStorage.getItem(key+'_t')||0))/3600000);
+    toast(`Using cached catalog (~${age}h old)`);return c;}
+  throw new Error('no data '+key);
+}
+async function loadData(){
+  try{
+    toast('Fetching CelesTrak catalog…');
+    const [gp,sc]=await Promise.all([
+      getCached('https://celestrak.org/NORAD/elements/gp.php?GROUP=active&FORMAT=tle',
+        'tle_active',t=>/^\s*\d \d{5}/m.test(t)),
+      getCached('https://celestrak.org/pub/satcat.csv',
+        'satcat',t=>t.startsWith('OBJECT_NAME,'))
+    ]);
+    const cat=parseCSV(sc);
+    parseTLE(gp).forEach(s=>{
+      const id=String(parseInt(s.l1.substring(2,7),10));
+      let sr;try{sr=satellite.twoline2satrec(s.l1,s.l2);}catch(e){return;}
+      if(!sr||sr.error)return;
+      const owner=cat.get(id)||'';
+      const rec={name:s.name||('NORAD '+id),owner,satrec:sr,
+        intl:s.l1.substring(9,17).trim(),rev:s.l2.substring(63,68).trim(),
+        epoch:epochFromL1(s.l1),el:elements(sr,sr.ecco)};
+      sats.set(id,rec);
+      if(!byCountry.has(owner))byCountry.set(owner,[]);
+      byCountry.get(owner).push(id);
+    });
+    buildTabs();
+    toast(`Loaded ${sats.size} satellites · ${byCountry.size} owners`);
+    $('infoBody').innerHTML='<div class="info-empty">Catalog ready.<br>'+
+      'Pick a country tab and tick satellites to begin.</div>';
+  }catch(e){
+    console.error(e);
+    $('infoBody').innerHTML='<div class="info-empty" style="color:#ff6b6b">'+
+      'Failed to load CelesTrak data.<br>Check connection and reload.</div>';
+    toast('Data load failed');
+  }
+}
+
+/* ============================================================
+   4. SELECTION MODEL
+   ============================================================ */
+const sel=new Map();           // id -> {color,marker,track,line,pt}
+let focusedId=null, activeTab=null, colorIx=0;
+const satLayer=L.layerGroup().addTo(map);
+
+function geo(satrec,d){
+  const pv=satellite.propagate(satrec,d);
+  if(!pv.position)return null;
+  const g=satellite.eciToGeodetic(pv.position,satellite.gstime(d));
+  const v=pv.velocity;
+  return {lat:satellite.degreesLat(g.latitude),
+    lon:satellite.degreesLong(g.longitude),alt:g.height,
+    spd:v?Math.sqrt(v.x*v.x+v.y*v.y+v.z*v.z):0,
+    eci:pv.position};
+}
+function toggleSat(id,on){
+  if(on){
+    if(sel.size>=MAX_SEL){toast(`Max ${MAX_SEL} satellites at once`);
+      const cb=document.querySelector(`.ck[data-id="${id}"]`);if(cb)cb.checked=false;return;}
+    const s=sats.get(id);if(!s)return;
+    const color=PALETTE[colorIx++%PALETTE.length];
+    const mk=L.circleMarker([0,0],{radius:5,color,weight:1.5,
+      fillColor:color,fillOpacity:.7}).bindTooltip(s.name,
+      {className:'sat-tip',direction:'top'});
+    mk.on('click',()=>focus(id));mk.addTo(satLayer);
+    const o={color,marker:mk,track:null,line:null,pt:null};
+    sel.set(id,o);
+    add3D(id,o);addChartDs(id,s.name,color);
+    if(!focusedId)focus(id);
+  }else{
+    const o=sel.get(id);if(!o)return;
+    satLayer.removeLayer(o.marker);
+    if(o.track)map.removeLayer(o.track);
+    rm3D(o);rmChartDs(id);sel.delete(id);
+    if(focusedId===id){focusedId=null;
+      const nx=sel.keys().next();if(!nx.done)focus(nx.value);
+      else $('infoBody').innerHTML='<div class="info-empty">No satellite '+
+        'focused. Tick a satellite or click a row.</div>';}
+  }
+  $('orbCount').textContent=sel.size;
+  buildLegend();
+  [...document.querySelectorAll('.ck[data-id="'+id+'"]')].forEach(c=>c.checked=on);
+}
+function focus(id){
+  focusedId=id;
+  [...document.querySelectorAll('tr[data-id]')].forEach(r=>
+    r.classList.toggle('focused',r.dataset.id===id));
+  for(const[i,o]of sel){o.marker.setStyle({radius:i===id?8:5,
+    weight:i===id?2.5:1.5});}
+  renderInfo();
+}
+
+/* ============================================================
+   5. 3D ORBIT (Three.js)
+   ============================================================ */
+let scene,cam,renderer,world,earthGrp;
+function init3D(){
+  const el=$('orbit3d');
+  scene=new THREE.Scene();
+  cam=new THREE.PerspectiveCamera(45,el.clientWidth/el.clientHeight,0.1,2000);
+  cam.position.set(0,3,24);
+  cam.lookAt(0,0,0);
+  renderer=new THREE.WebGLRenderer({antialias:true,alpha:true});
+  renderer.setPixelRatio(Math.min(devicePixelRatio,2));
+  renderer.setSize(el.clientWidth,el.clientHeight);
+  el.appendChild(renderer.domElement);
+  world=new THREE.Group();scene.add(world);
+  const R=RE/1000;
+  earthGrp=new THREE.Group();world.add(earthGrp);
+  earthGrp.add(new THREE.Mesh(new THREE.SphereGeometry(R*0.995,40,28),
+    new THREE.MeshBasicMaterial({color:0x04181a})));
+  earthGrp.add(new THREE.LineSegments(
+    new THREE.WireframeGeometry(new THREE.SphereGeometry(R,24,16)),
+    new THREE.LineBasicMaterial({color:0x0c5b52,transparent:true,opacity:.55})));
+  // equator ring
+  const eq=new THREE.RingGeometry(R*1.001,R*1.01,64);
+  const eqm=new THREE.Mesh(eq,new THREE.MeshBasicMaterial({color:0x1f8a7a,
+    side:THREE.DoubleSide,transparent:true,opacity:.5}));
+  eqm.rotation.x=Math.PI/2;earthGrp.add(eqm);
+  new ResizeObserver(()=>{
+    if(!el.clientWidth)return;
+    cam.aspect=el.clientWidth/el.clientHeight;cam.updateProjectionMatrix();
+    renderer.setSize(el.clientWidth,el.clientHeight);
+  }).observe(el);
+  (function loop(){requestAnimationFrame(loop);
+    world.rotation.y+=0.0016;renderer.render(scene,cam);})();
+}
+function add3D(id,o){
+  const s=sats.get(id),now=new Date();
+  const per=s.el.period,step=per/200,pts=[];
+  for(let t=0;t<=per;t+=step){
+    const p=satellite.propagate(s.satrec,new Date(now.getTime()+t*60000));
+    if(p&&p.position)pts.push(new THREE.Vector3(
+      p.position.x/1000,p.position.z/1000,-p.position.y/1000));
+  }
+  const line=new THREE.Line(new THREE.BufferGeometry().setFromPoints(pts),
+    new THREE.LineBasicMaterial({color:o.color,transparent:true,opacity:.7}));
+  const pt=new THREE.Mesh(new THREE.SphereGeometry(0.35,12,12),
+    new THREE.MeshBasicMaterial({color:o.color}));
+  world.add(line);world.add(pt);o.line=line;o.pt=pt;
+}
+function rm3D(o){
+  if(o.line){world.remove(o.line);o.line.geometry.dispose();}
+  if(o.pt){world.remove(o.pt);o.pt.geometry.dispose();}
+}
+
+/* ============================================================
+   6. CHARTS (Chart.js)
+   ============================================================ */
+const WIN=60;
+const baseOpts=t=>({type:'line',data:{labels:[],datasets:[]},
+  options:{responsive:true,maintainAspectRatio:false,animation:false,
+    interaction:{intersect:false,mode:'index'},
+    plugins:{legend:{display:false}},
+    scales:{x:{display:false},
+      y:{ticks:{color:'#888',font:{size:9}},grid:{color:'rgba(255,255,255,.05)'}}}}});
+const chAlt=new Chart($('cAlt'),baseOpts());
+const chVel=new Chart($('cVel'),baseOpts());
+function addChartDs(id,name,color){
+  const ds={label:name,data:[],borderColor:color,borderWidth:1.4,
+    pointRadius:0,tension:.25,_id:id};
+  chAlt.data.datasets.push({...ds,data:[]});
+  chVel.data.datasets.push({...ds,data:[]});
+}
+function rmChartDs(id){
+  [chAlt,chVel].forEach(c=>{
+    c.data.datasets=c.data.datasets.filter(d=>d._id!==id);c.update('none');});
+}
+
+/* ============================================================
+   7. BOTTOM PANEL — country tabs + list
+   ============================================================ */
+function buildTabs(){
+  const tabs=$('tabs');tabs.innerHTML='';
+  [...byCountry.entries()].filter(([c,a])=>a.length)
+    .sort((a,b)=>b[1].length-a[1].length).forEach(([code,ids])=>{
+    const m=ownerMeta(code);
+    const b=document.createElement('button');
+    b.className='tab';b.dataset.code=code;
+    b.title=`${m.name} — ${ids.length} satellites`;
+    b.innerHTML=`<img src="https://flagcdn.com/w40/${m.iso}.png"
+      onerror="this.src='https://flagcdn.com/w40/un.png'">`;
+    b.onclick=()=>selectTab(code,b);
+    tabs.appendChild(b);
+  });
+  const first=tabs.querySelector('.tab');if(first)first.click();
+}
+function selectTab(code,btn){
+  activeTab=code;
+  [...document.querySelectorAll('.tab')].forEach(t=>
+    t.classList.toggle('active',t===btn));
+  $('search').value='';
+  renderRows((byCountry.get(code)||[]).slice().sort((a,b)=>
+    sats.get(a).name.localeCompare(sats.get(b).name)));
+}
+function renderRows(ids){
+  const tb=$('satRows');
+  tb.innerHTML=ids.map(id=>{
+    const s=sats.get(id),e=s.el,on=sel.has(id);
+    return `<tr data-id="${id}" class="${id===focusedId?'focused':''}"
+      title="${s.name}">
+      <td><input type="checkbox" class="ck" data-id="${id}" ${on?'checked':''}></td>
+      <td class="nm">${s.name}</td>
+      <td class="dim">${id}</td>
+      <td>${e.period.toFixed(1)} m</td></tr>`;
+  }).join('')||'<tr><td colspan="4" style="padding:18px;color:var(--dim)">No satellites.</td></tr>';
+  tb.querySelectorAll('tr[data-id]').forEach(tr=>{
+    tr.onclick=ev=>{
+      if(ev.target.classList.contains('ck'))return;
+      focus(tr.dataset.id);};
+  });
+  tb.querySelectorAll('.ck').forEach(cb=>{
+    cb.onclick=ev=>{ev.stopPropagation();toggleSat(cb.dataset.id,cb.checked);};
+  });
+}
+$('search').addEventListener('input',e=>{
+  const q=e.target.value.trim().toLowerCase();
+  if(!q){if(activeTab)renderRows((byCountry.get(activeTab)||[]).slice()
+    .sort((a,b)=>sats.get(a).name.localeCompare(sats.get(b).name)));return;}
+  const r=[];
+  for(const[id,s]of sats){
+    if(s.name.toLowerCase().includes(q)||id.includes(q))r.push(id);
+    if(r.length>=300)break;
+  }
+  renderRows(r);
+});
+function buildLegend(){
+  $('legend').innerHTML=[...sel.entries()].map(([id,o])=>
+    `<span class="lg"><span class="sw" style="background:${o.color}"></span>${
+      sats.get(id).name}</span>`).join('')||
+    '<span style="color:var(--dim);font-size:.7rem">No satellites selected</span>';
+}
+
+/* ============================================================
+   8. LEFT INFO PANEL (focused sat, live)
+   ============================================================ */
+function renderInfo(now=new Date()){
+  if(!focusedId||!sats.get(focusedId)){return;}
+  const s=sats.get(focusedId),e=s.el,m=ownerMeta(s.owner);
+  const p=geo(s.satrec,now);
+  const row=(k,v)=>`<div class="kv"><span class="k">${k}</span><span class="v">${v}</span></div>`;
+  $('infoBody').innerHTML=
+    `<div class="sat-name">${s.name}</div>
+     <div class="sat-sub">${m.name} · NORAD ${focusedId} · ${s.intl||'—'}</div>
+     <div class="grp">Live sub-point</div>`+
+    (p?row('Latitude',p.lat.toFixed(3)+'°')+row('Longitude',p.lon.toFixed(3)+'°')+
+        row('Altitude',p.alt.toFixed(1)+' km')+row('Velocity',p.spd.toFixed(3)+' km/s')
+      :'<div class="info-empty">Propagation unavailable (decayed?)</div>')+
+    `<div class="grp">Orbital elements</div>`+
+    row('Inclination',e.inc.toFixed(4)+'°')+
+    row('RAAN',e.raan.toFixed(4)+'°')+
+    row('Eccentricity',e.ecc.toFixed(7))+
+    row('Arg. of perigee',e.argp.toFixed(4)+'°')+
+    row('Mean anomaly',e.ma.toFixed(4)+'°')+
+    row('Mean motion',e.meanMot.toFixed(8)+' rev/day')+
+    row('Period',e.period.toFixed(3)+' min')+
+    row('Semi-major axis',e.a.toFixed(2)+' km')+
+    row('Apogee',e.apo.toFixed(1)+' km')+
+    row('Perigee',e.per.toFixed(1)+' km')+
+    row('B* drag',e.bstar.toExponential(4))+
+    `<div class="grp">Element set</div>`+
+    row('Epoch (UTC)',s.epoch.toISOString().replace('T',' ').slice(0,19))+
+    row('Rev @ epoch',s.rev||'—')+
+    row('Int\'l desig.',s.intl||'—');
+}
+
+/* ============================================================
+   9. REALTIME TICK
+   ============================================================ */
+setInterval(()=>{
+  if(!sel.size)return;
+  const now=new Date();
+  for(const[id,o]of sel){
+    const s=sats.get(id),p=geo(s.satrec,now);
+    if(!p)continue;
+    o.marker.setLatLng([p.lat,p.lon]);
+    if(o.pt)o.pt.position.set(p.eci.x/1000,p.eci.z/1000,-p.eci.y/1000);
+    const da=chAlt.data.datasets.find(d=>d._id===id);
+    const dv=chVel.data.datasets.find(d=>d._id===id);
+    if(da){da.data.push(p.alt);if(da.data.length>WIN)da.data.shift();}
+    if(dv){dv.data.push(p.spd);if(dv.data.length>WIN)dv.data.shift();}
+  }
+  const lab=chAlt.data.labels;
+  lab.push('');if(lab.length>WIN)lab.shift();
+  chVel.data.labels=lab.slice();
+  chAlt.update('none');chVel.update('none');
+  if(focusedId)renderInfo(now);
+},1000);
+
+/* ---- go ---- */
+init3D();
+loadData();
+</script>
+</body>
+</html>
